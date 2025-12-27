@@ -1,0 +1,123 @@
+pipeline {
+    agent any
+    
+    
+    tools {
+        maven 'maven3'
+        jdk 'jdk-21'
+    }
+    
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+        IMAGE_TAG = "V${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Git Clone') {
+            steps {
+                git branch: 'main', url: 'https://github.com/RupeshKotal/retail-store-sample-app.git'
+            }
+        }
+        
+        stage('Compile') {
+            steps {
+                sh '''
+                cd /var/lib/jenkins/workspace/UI-Pipeline/src/ui/
+                mvn compile
+                '''
+            }
+        }
+        
+        
+        stage('Test') {
+            steps {
+                sh '''
+                cd /var/lib/jenkins/workspace/UI-Pipeline/src/ui/
+                mvn test
+                '''
+            }
+        }
+        
+        
+        stage('Trivy file scan') {
+            steps {
+                
+                sh '''
+                cd /var/lib/jenkins/workspace/UI-Pipeline/src/ui/
+                trivy fs . --format table -o filescan-report.html
+                '''
+                
+            }
+        }
+        
+        
+        stage('Sonar Analysis') {
+    steps {
+        withSonarQubeEnv('sonar') {
+            sh '''
+            $SCANNER_HOME/bin/sonar-scanner \
+              -Dsonar.projectKey=retailstore \
+              -Dsonar.projectName=retailstore \
+              -Dsonar.sources=src \
+              -Dsonar.java.binaries=/var/lib/jenkins/workspace/UI-Pipeline/src/ui/target
+            '''
+        }
+    }
+}
+
+        
+        
+        stage('Quality Gate xhexk') {
+            steps {
+                
+                timeout(time: 1, unit: 'HOURS') {
+                        waitForQualityGate abortPipeline: false, credentialsId: 'sonar-cred'
+                    }
+                
+            }
+        }
+        
+        stage('Docker Image Build and Tag') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred') {
+                                sh "docker build -t ruxs123/retailstore-ui:${IMAGE_TAG} \
+                                /var/lib/jenkins/workspace/UI-Pipeline/src/ui/"
+                         }
+                }
+            }
+        }
+        
+        // stage('Image Scan') {
+        //     steps {
+        //       sh """
+        // trivy image \
+        //   --severity HIGH,CRITICAL \
+        //   --format template \
+        //   --template "@contrib/html.tpl" \
+        //   -o trivy-image-report.html \
+        //   ruxs123/retailstore-ui:${IMAGE_TAG}
+        //   ruxs123/retailstore-ui:${IMAGE_TAG}
+        // """
+        //     }
+        // }
+        
+        stage('Push To Docker repos') {
+            steps {
+                 script {
+                    withDockerRegistry(credentialsId: 'docker-cred') {
+                                sh "docker push ruxs123/retailstore-ui:${IMAGE_TAG} "
+                         }
+                }
+                
+            }
+        }
+        
+        stage('Update Manifest file') {
+            steps {
+               sh "echo hello"
+            }
+        }
+        
+    }
+}
