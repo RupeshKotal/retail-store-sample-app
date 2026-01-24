@@ -1,0 +1,111 @@
+pipeline {
+    agent any
+
+    tools {
+        go 'go-1.21'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+        IMAGE_TAG = "V${BUILD_NUMBER}"
+        SERVICE_PATH = "/var/lib/jenkins/workspace/UI-Pipeline/src/catalog"
+        IMAGE_NAME = "ruxs123/retailstore-catalog"
+    }
+
+    stages {
+
+        stage('Git Clone') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/RupeshKotal/retail-store-sample-app.git'
+            }
+        }
+
+        stage('Go Mod Download') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                go mod tidy
+                """
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                go build -o catalog-app
+                """
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                go test ./...
+                """
+            }
+        }
+
+        stage('Trivy File Scan') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                trivy fs . --format table -o filescan-catalog-report.html
+                """
+            }
+        }
+
+        stage('Sonar Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                      -Dsonar.projectKey=retailstore-catalog \
+                      -Dsonar.projectName=retailstore-catalog \
+                      -Dsonar.sources=. \
+                      -Dsonar.language=go
+                    """
+                }
+            }
+        }
+
+        stage('Quality Gate Check') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: false,
+                        credentialsId: 'sonar-cred'
+                }
+            }
+        }
+
+        stage('Docker Build and Tag') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred') {
+                        sh """
+                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ${SERVICE_PATH}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push To Docker Repo') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred') {
+                        sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+
+        stage('Update Manifest File') {
+            steps {
+                sh "echo 'Update Kubernetes manifest with new image tag'"
+            }
+        }
+    }
+}
