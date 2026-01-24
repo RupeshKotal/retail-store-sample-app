@@ -1,0 +1,102 @@
+pipeline {
+    agent any
+
+    tools {
+        nodejs 'node-18'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+        IMAGE_TAG = "V${BUILD_NUMBER}"
+        SERVICE_PATH = "/var/lib/jenkins/workspace/UI-Pipeline/src/checkout"
+        IMAGE_NAME = "ruxs123/retailstore-checkout"
+    }
+
+    stages {
+
+        stage('Git Clone') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/RupeshKotal/retail-store-sample-app.git'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                npm install
+                """
+            }
+        }
+
+        stage('Lint & Test') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                npm test
+                """
+            }
+        }
+
+        stage('Trivy File Scan') {
+            steps {
+                sh """
+                cd ${SERVICE_PATH}
+                trivy fs . --format table -o filescan-checkout-report.html
+                """
+            }
+        }
+
+        stage('Sonar Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                      -Dsonar.projectKey=retailstore-checkout \
+                      -Dsonar.projectName=retailstore-checkout \
+                      -Dsonar.sources=. \
+                      -Dsonar.language=js
+                    """
+                }
+            }
+        }
+
+        stage('Quality Gate Check') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: false,
+                        credentialsId: 'sonar-cred'
+                }
+            }
+        }
+
+        stage('Docker Build and Tag') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred') {
+                        sh """
+                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ${SERVICE_PATH}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push To Docker Repo') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred') {
+                        sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+
+        stage('Update Manifest File') {
+            steps {
+                sh "echo 'Update Kubernetes manifest with new image tag'"
+            }
+        }
+    }
+}
